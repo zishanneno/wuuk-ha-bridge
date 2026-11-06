@@ -1,0 +1,27 @@
+name: Wuuk Doorbell Bridge
+version: "0.1.0"
+slug: wuuk_bridge
+image: "ghcr.io/zishanneno/wuuk-ha-bridge"
+description: Unofficial Wuuk doorbell events and LAN battery reporting via MQTT
+arch:
+  - aarch64
+  - amd64
+startup: application
+boot: manual
+host_network: true
+options:
+  wuuk_email: null
+  wuuk_password: null
+  mqtt_url: null
+  mqtt_discovery_prefix: homeassistant
+  battery_enabled: true
+  battery_interval_seconds: 900
+schema:
+  wuuk_email: email
+  wuuk_password: password
+  mqtt_url: str
+  mqtt_username: str?
+  mqtt_password: password?
+  mqtt_discovery_prefix: str
+  battery_enabled: bool
+  battery_interval_seconds: int(60,86400)

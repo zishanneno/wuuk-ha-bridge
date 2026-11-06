@@ -1,0 +1,25 @@
+configuration:
+  wuuk_email:
+    name: Wuuk email
+    description: Email address for the Wuuk account with access to the doorbell.
+  wuuk_password:
+    name: Wuuk password
+    description: Password for that Wuuk account.
+  mqtt_url:
+    name: MQTT broker URL
+    description: Broker used by Home Assistant, such as mqtt://core-mosquitto:1883.
+  mqtt_username:
+    name: MQTT username
+    description: Leave unset if your broker does not require a username.
+  mqtt_password:
+    name: MQTT password
+    description: Leave unset if your broker does not require a password.
+  mqtt_discovery_prefix:
+    name: MQTT discovery prefix
+    description: Match the prefix configured in Home Assistant MQTT.
+  battery_enabled:
+    name: LAN battery polling
+    description: Automatically discover and poll a Y0210 doorbell paired with a B0210 on the same IPv4 broadcast network.
+  battery_interval_seconds:
+    name: Battery polling interval
+    description: Seconds between LAN battery polls.

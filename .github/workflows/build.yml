@@ -1,0 +1,53 @@
+name: Build Home Assistant add-on
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    defaults:
+      run:
+        working-directory: wuuk_bridge
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Build add-on image
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          IMAGE: wuuk-ha-app:ci-${{ matrix.arch }}
+          HA_ARCH: ${{ matrix.arch }}
+        run: |
+          version=$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')
+          docker build --platform "$PLATFORM" --build-arg "BUILD_VERSION=$version" --tag "$IMAGE" .
+          actual=$(docker image inspect --format '{{ index .Config.Labels "io.hass.type" }} {{ index .Config.Labels "io.hass.arch" }} {{ index .Config.Labels "io.hass.version" }}' "$IMAGE")
+          test "$actual" = "app $HA_ARCH $version"
+      - name: Check add-on entrypoint
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          IMAGE: wuuk-ha-app:ci-${{ matrix.arch }}
+        run: |
+          status=0
+          output=$(docker run --rm --network none --platform "$PLATFORM" "$IMAGE" 2>&1) || status=$?
+          printf '%s\n' "$output"
+          test "$status" -eq 1
+          grep -Fq 'Could not read /data/options.json' <<< "$output"

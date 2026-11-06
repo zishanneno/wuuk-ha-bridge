@@ -1,0 +1,25 @@
+{
+  "name": "wuuk-ha-bridge",
+  "version": "0.1.0",
+  "description": "Unofficial Wuuk doorbell MQTT bridge for Home Assistant",
+  "scripts": {
+    "test": "npm run build && node --test dist/bridge.test.js",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js"
+  },
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@eneris/push-receiver": "4.4.0",
+    "mqtt": "5.16.1"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "aedes": "1.2.0",
+    "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "private": true
+}
