@@ -1,6 +1,6 @@
 {
   "name": "wuuk-ha-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Unofficial Wuuk doorbell MQTT bridge for Home Assistant",
   "scripts": {
     "test": "npm run build && node --test dist/bridge.test.js",
