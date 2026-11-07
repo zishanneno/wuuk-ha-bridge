@@ -1,5 +1,5 @@
 name: Wuuk Doorbell Bridge
-version: "0.1.0"
+version: "0.1.1"
 slug: wuuk_bridge
 image: "ghcr.io/zishanneno/wuuk-ha-bridge"
 description: Unofficial Wuuk doorbell events and LAN battery reporting via MQTT

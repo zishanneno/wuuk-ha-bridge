@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { createServer } from 'node:net';
 import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { Aedes } from 'aedes';
@@ -15,6 +15,133 @@ import { batteryTargets } from './battery.js';
 import { deviceId, HomeAssistantMqtt } from './mqtt.js';
 import { decodePush } from './wuuk.js';
 import { receiverStateForAccount, type ReceiverState } from './receiver-state.js';
+import { firebaseSentTime, installFirebaseSentTimeTracker, isStalePush, trackParserSentTime } from './push-timing.js';
+
+test('tracks Firebase transport time only while its packet is delivered', () => {
+  let registered: ((packet: { tag?: number; object?: { sent?: unknown } }) => unknown) | undefined;
+  const prototype = {
+    on(_event: string, listener: (packet: { tag?: number; object?: { sent?: unknown } }) => unknown) {
+      registered = listener;
+      return () => { registered = undefined; };
+    },
+  };
+  const original = prototype.on;
+  const tracker = trackParserSentTime(prototype);
+  let observed: unknown;
+  prototype.on('message', () => { observed = tracker.current(); });
+  registered!({ tag: 8, object: { sent: '1794000000000' } });
+  assert.equal(observed, '1794000000000');
+  assert.equal(tracker.current(), undefined);
+  registered!({ tag: 8, object: {} });
+  assert.equal(observed, undefined);
+  tracker.restore();
+  assert.equal(prototype.on, original);
+});
+
+test('tracks a message through the installed Firebase parser', () => {
+  const require = createRequire(import.meta.url);
+  const Parser = require(join(dirname(require.resolve('@eneris/push-receiver')), 'parser.js')).default;
+  const tracker = installFirebaseSentTimeTracker();
+  try {
+    const parser = new Parser(new EventEmitter());
+    let observed: unknown;
+    parser.on('message', () => { observed = tracker.current(); });
+    parser.emit('message', { tag: 8, object: { sent: '1794000000000' } });
+    assert.equal(observed, '1794000000000');
+    assert.equal(tracker.current(), undefined);
+    parser.destroy();
+  } finally {
+    tracker.restore();
+  }
+});
+
+test('filters stale Firebase notifications but preserves fresh and uncertain events', () => {
+  const now = Date.UTC(2026, 10, 7, 5, 0, 0);
+  assert.equal(firebaseSentTime(String(now), now), now);
+  assert.equal(firebaseSentTime(String(now / 1000), now), now);
+  assert.equal(isStalePush(firebaseSentTime(String(now - 60_001), now), now), true);
+  assert.equal(isStalePush(firebaseSentTime(String(now - 60_000), now), now), false);
+  for (const unknown of [undefined, null, '', 'invalid', 0, '1', String(now + 301_000)]) {
+    assert.equal(isStalePush(firebaseSentTime(unknown, now), now), false);
+  }
+});
+
+test('drops a replayed Firebase ring and persists its ID while delivering fresh and unknown-time rings',
+  { timeout: 30_000 }, async t => {
+    const directory = await mkdtemp(join(tmpdir(), 'wuuk-timing-test-'));
+    const stateFile = join(directory, 'receiver.json');
+    const preload = join(directory, 'preload.cjs');
+    const broker = await Aedes.createBroker();
+    const server = createServer(broker.handle);
+    t.after(async () => {
+      await broker.close();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      await rm(directory, { recursive: true, force: true });
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    assert(address && typeof address !== 'string');
+    const brokerUrl = `mqtt://127.0.0.1:${address.port}`;
+    const subscriber = await connectAsync(brokerUrl);
+    t.after(() => subscriber.endAsync(true));
+    await subscriber.subscribeAsync('wuuk/+/ring');
+    const received: string[] = [];
+    subscriber.on('message', topic => received.push(topic));
+    await writeFile(preload, `
+      const { EventEmitter } = require('node:events');
+      const { dirname, join } = require('node:path');
+      const entry = ${JSON.stringify(createRequire(import.meta.url).resolve('@eneris/push-receiver'))};
+      const receiverModule = require(entry);
+      const Parser = require(join(dirname(entry), 'parser.js')).default;
+      receiverModule.PushReceiver = class extends EventEmitter {
+        constructor(config) { super(); this.persistentIds = config.persistentIds; this.fcmToken = 'test-token'; }
+        onCredentialsChanged(fn) { this.on('credentials', fn); }
+        onNotification(fn) { this.on('notification', fn); }
+        onReady(fn) { this.on('ready', fn); }
+        async connect() {
+          const parser = new Parser(new EventEmitter()); this.parser = parser;
+          parser.on('message', ({object}) => this.emit('notification', {
+            message: { data: { sn: object.serial, kind: 1 } }, persistentId: object.persistentId,
+          }));
+          this.emit('ready');
+          setTimeout(() => {
+            parser.emit('message', { tag: 8, object: { sent: String(Date.now()-300000), serial:'old', persistentId:'old-id' } });
+            parser.emit('message', { tag: 8, object: { sent: String(Date.now()), serial:'fresh', persistentId:'fresh-id' } });
+            parser.emit('message', { tag: 8, object: { serial:'unknown', persistentId:'unknown-id' } });
+          }, 500);
+        }
+        destroy() { this.parser?.destroy(); }
+      };
+      global.fetch = async (url) => {
+        if (url.endsWith('/user/login')) return Response.json({ data: { user_id:'account', token:'session' } });
+        if (url.endsWith('/device/all')) return Response.json({ data: [] });
+        return Response.json({ data: {} });
+      };
+    `);
+    const child = spawn(process.execPath, ['--require', preload, fileURLToPath(new URL('./index.js', import.meta.url))], {
+      env: { ...process.env, WUUK_EMAIL:'test@example.test', WUUK_PASSWORD:'test', MQTT_URL:brokerUrl,
+        MQTT_USERNAME:'', MQTT_PASSWORD:'', WUUK_STATE_FILE:stateFile, WUUK_BATTERY_ENABLED:'false', WUUK_BATTERY_PROFILE:'' },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let output = '';
+    child.stderr.on('data', data => { output += data.toString(); });
+    try {
+      const end = Date.now()+10_000;
+      while (received.length < 2 && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 50));
+      assert.deepEqual(new Set(received), new Set([`wuuk/${deviceId('fresh')}/ring`, `wuuk/${deviceId('unknown')}/ring`]));
+      assert.match(output, /Discarded an outdated Firebase notification/);
+      await new Promise(resolve => setTimeout(resolve, 100));
+      child.kill('SIGTERM');
+      await once(child, 'exit');
+      const state = JSON.parse(await readFile(stateFile, 'utf8')) as ReceiverState;
+      assert(state.persistentIds.includes('old-id'));
+      assert(state.persistentIds.includes('fresh-id'));
+      assert(state.persistentIds.includes('unknown-id'));
+    } finally {
+      child.kill('SIGKILL');
+    }
+  });
 
 const testCredentials = {
   gcm: { androidId: 'test-id', securityToken: 'test-security-token', appId: 'test-app', token: 'test-gcm-token' },

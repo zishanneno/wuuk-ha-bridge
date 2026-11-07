@@ -8,6 +8,8 @@ Bring doorbell presses, camera activity, and battery percentage from your Wuuk d
 | Camera activity | Receives activity notifications through the same service. |
 | Battery percentage | Reads the battery over your local network. Setup is automatic for the tested doorbell and base station. |
 
+To avoid replaying old alerts after a reconnect, the bridge discards notifications with a valid Firebase send timestamp more than 60 seconds old. This also means a genuine ring or activity notification delayed longer than a minute will not be delivered. Notifications without a usable timestamp are still delivered.
+
 ## What you need
 
 - A Wuuk account that signs in with email and password and can see the doorbell in the Wuuk app. You can use a separate account after accepting a share from the owner. Social sign-in and interactive two-factor prompts are unsupported.
@@ -51,7 +53,7 @@ Keep `state/receiver.json` private and preserve it between restarts. Run one bri
 
 ## Verification
 
-A Home Assistant OS test installation verified the configuration form, automatic battery discovery, and a live camera activity event. A physical button press was verified with the standalone listener. A physical press through the Home Assistant app has yet to be tested.
+Home Assistant OS testing verified the configuration form, automatic battery discovery, camera activity events, and physical doorbell presses. A queued press was also tested across a bridge restart.
 
 ## License
 

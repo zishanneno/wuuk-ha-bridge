@@ -6,6 +6,7 @@ import { batteryTargets, readBattery, type BatteryProfile } from './battery.js';
 import { firebaseConfig } from './firebase-config.js';
 import { HomeAssistantMqtt } from './mqtt.js';
 import { receiverStateForAccount, type ReceiverState } from './receiver-state.js';
+import { firebaseSentTime, installFirebaseSentTimeTracker, isStalePush } from './push-timing.js';
 import { decodePush, WuukClient, type WuukDevice } from './wuuk.js';
 
 function required(name: string): string {
@@ -66,6 +67,7 @@ async function main(): Promise<void> {
   const mqtt = new HomeAssistantMqtt(mqttUrl, `${state.deviceId}_${state.accountId}`, process.env.MQTT_DISCOVERY_PREFIX,
     process.env.MQTT_USERNAME, process.env.MQTT_PASSWORD);
   mqtt.client.on('error', () => console.error('MQTT connection error'));
+  const sentTime = installFirebaseSentTimeTracker();
   const push = new PushReceiver({
     firebase: firebaseConfig,
     bundleId: 'com.wuuklabs.android.store',
@@ -85,12 +87,20 @@ async function main(): Promise<void> {
   push.onNotification(({ message, persistentId }) => {
     const event = decodePush(message);
     if (!event || stopping) return;
+    const receivedAt = Date.now();
+    const sentAt = firebaseSentTime(sentTime.current(), receivedAt);
     if (push.persistentIds.length > 100) push.persistentIds.splice(0, push.persistentIds.length - 100);
     events = events.then(async () => {
       const now = Date.now();
       for (const [key, expires] of recent) if (expires <= now) recent.delete(key);
       const key = JSON.stringify([event.serial, event.kind, event.time]);
       if (recent.has(key) || (persistentId && state.persistentIds.includes(persistentId))) return;
+      if (isStalePush(sentAt, receivedAt)) {
+        if (persistentId) state.persistentIds = [...state.persistentIds, persistentId].slice(-100);
+        await saveState();
+        console.error('Discarded an outdated Firebase notification');
+        return;
+      }
       await mqtt.publishEvent(event);
       recent.set(key, now + (event.time ? 60_000 : 1_000));
       if (persistentId) state.persistentIds = [...state.persistentIds, persistentId].slice(-100);
@@ -117,6 +127,7 @@ async function main(): Promise<void> {
     stopping = true;
     clearTimeout(batteryTimer);
     push.destroy();
+    sentTime.restore();
     await mqtt.close();
     await saving.catch(() => undefined);
   }
